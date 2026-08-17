@@ -138,11 +138,11 @@ test('WSS agent standard WebSocket adapter preserves attachment state', async ()
 
 test('WSS agent ack suggests realtime or idle report interval', () => {
   const broadcaster = makeBroadcaster();
-  assert.equal(broadcaster._getAgentNextWssReportAfterMs(60000, true), 4000);
+  assert.equal(broadcaster._getAgentNextWssReportAfterMs(60000, true), 1000);
   assert.equal(broadcaster._getAgentNextWssReportAfterMs(60000, false), 8000);
   assert.equal(broadcaster._getAgentNextWssReportAfterMs(120000, false), 16000);
   assert.equal(broadcaster._getAgentNextWssReportAfterMs(180000, false), 24000);
-  assert.equal(broadcaster._getAgentNextWssReportAfterMs(30000, true), 2000);
+  assert.equal(broadcaster._getAgentNextWssReportAfterMs(30000, true), 1000);
   assert.equal(
     broadcaster._getAgentNextWssReportAfterMs(30000, {
       frontendActive: false,
@@ -165,7 +165,7 @@ test('WSS agent ack suggests realtime or idle report interval', () => {
       resourceAlertActive: true,
       realtimeActive: true
     }),
-    4000
+    1000
   );
 });
 
@@ -197,7 +197,7 @@ test('frontend realtime hint pushes active interval to connected agents', async 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].type, 'ack');
   assert.equal(sent[0].realtimeHint, true);
-  assert.equal(sent[0].nextWssReportAfterMs, 2000);
+  assert.equal(sent[0].nextWssReportAfterMs, 1000);
 });
 
 test('WSS agent context uses current report interval from payload', async () => {

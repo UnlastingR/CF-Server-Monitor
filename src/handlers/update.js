@@ -38,7 +38,7 @@ function buildPayloadForBroadcast(id, metrics = {}, extra = {}) {
 }
 
 // 批量推送：前端实时使用短窗口；仅资源告警缓存时使用较长窗口降低 DO 请求。
-const REALTIME_BATCH_WINDOW_MS = 5 * 1000;
+const REALTIME_BATCH_WINDOW_MS = 1000;
 const RESOURCE_ALERT_BATCH_WINDOW_MS = 25 * 1000;
 const MAX_BATCH_SAMPLES = 300;
 const FRONTEND_SUBSCRIBER_CHECK_INTERVAL_MS = 5 * 60 * 1000;
