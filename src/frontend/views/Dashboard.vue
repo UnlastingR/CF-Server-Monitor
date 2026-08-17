@@ -319,6 +319,7 @@ import { normalizeTimestamp as normalizeMetricTimestamp } from '../utils/time.js
 import { normalizeDashboardView, normalizeDisplayMode, resolveDisplayMode } from '../utils/displayMode.js'
 import { getPlaybackElapsedMs, resolvePlaybackCursor } from '../utils/playback.js'
 import { getMikusAssetUrl, isMikusThemeEnabled, normalizeThemeOptions, setMikusThemeClass } from '../utils/themeOptions.js'
+import { coalesceRealtimeBatchMessages } from '../utils/realtimeUi.js'
 import {
   CURRENCY_SYMBOLS,
   DEFAULT_EXCHANGE_RATES,
@@ -522,6 +523,7 @@ const getUpdateTime = (lastUpdated) => {
 const PLAYBACK_TICK_MS = 1000
 const MAX_BUFFER_SAMPLES_PER_SERVER = 600
 const playbackBuffers = new Map()
+let pendingLiveMessages = []
 
 const getServerReportTimestamp = (server, fallback = null) => {
   return normalizeMetricTimestamp(server?.report_timestamp ?? server?.last_updated, fallback)
@@ -643,6 +645,19 @@ const replayLatestReportUpdates = (data) => {
   queueLiveMessage({ type: 'batchUpdate', ts: Date.now(), updates }, { replayCachedReport: true })
 }
 
+const enqueueLiveMessage = (msg) => {
+  if (!msg || msg.type !== 'batchUpdate') return
+  pendingLiveMessages.push(msg)
+}
+
+const flushPendingLiveMessages = () => {
+  if (pendingLiveMessages.length === 0) return
+  const messages = pendingLiveMessages
+  pendingLiveMessages = []
+  const coalesced = coalesceRealtimeBatchMessages(messages)
+  if (coalesced) queueLiveMessage(coalesced)
+}
+
 const applyServerSample = (serverId, data, sampleTs, displayTs, reportTs = null) => {
   if (!serverId || !data) return
   const idx = servers.value.findIndex(s => s.id === serverId)
@@ -739,6 +754,7 @@ const recomputeStats = (currentTs = Date.now()) => {
 
 const runDashboardTick = () => {
   now.value = Date.now()
+  flushPendingLiveMessages()
   advanceServerClocks()
   recomputeStats(now.value)
   if (currentView.value === 'map') drawMarkers()
@@ -869,7 +885,7 @@ const startLiveSocket = () => {
     const allIds = servers.value.map(s => s.id).filter(Boolean)
     liveSockets = [createLiveSocket('all', {
       replay: false,
-      onMessage: queueLiveMessage,
+      onMessage: enqueueLiveMessage,
       onStatus: ({ connected }) => {
         liveConnected.value = !!connected
       }
@@ -883,7 +899,7 @@ const startLiveSocket = () => {
     if (!ids || ids.length === 0) return null
     return createLiveSocket('all', {
       replay: false,
-      onMessage: queueLiveMessage,
+      onMessage: enqueueLiveMessage,
       onStatus: ({ connected }) => {
         const anyConnected = liveSockets.some(s => s && s.isConnected)
         liveConnected.value = anyConnected
@@ -1057,6 +1073,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  pendingLiveMessages = []
   if (timeUpdateInterval) clearInterval(timeUpdateInterval)
   if (liveSockets.length > 0) {
     liveSockets.forEach(socket => {

@@ -359,6 +359,7 @@ import useTheme from '../composables/useTheme'
 import { isDisabledProbeMetric } from '../utils/server.js'
 import { resolvePlaybackCursor } from '../utils/playback.js'
 import { applyMikusThemeOptions } from '../utils/themeOptions.js'
+import { coalesceRealtimeBatchMessages } from '../utils/realtimeUi.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -1608,6 +1609,8 @@ const goToLogin = () => {
 }
 
 let liveSocket = null
+let liveUiUpdateInterval = null
+let pendingLiveMessages = []
 
 const initChartsOnMount = async () => {
   if (isInitializingCharts || chartsReady.value) return
@@ -1641,17 +1644,26 @@ const handleVisibility = () => {
   }
 }
 
-const handleLiveMessage = (msg) => {
+const enqueueLiveMessage = (msg) => {
   if (!msg || msg.type !== 'batchUpdate') return
-  const updates = Array.isArray(msg.updates) ? msg.updates : []
-  const matchedUpdates = updates.filter(update => update && String(update.serverId) === String(serverId))
-  if (matchedUpdates.length === 0) return
+  pendingLiveMessages.push(msg)
+}
+
+const flushPendingLiveMessages = () => {
+  if (pendingLiveMessages.length === 0) return
+  const messages = pendingLiveMessages
+  pendingLiveMessages = []
+  const coalesced = coalesceRealtimeBatchMessages(messages, serverId)
+  const update = coalesced?.updates?.[0]
+  const sample = update?.samples?.[0]
+  if (!sample?.data) return
 
   clearLatestReportReplayTimers()
-  const messageTs = normalizeMetricTimestamp(msg.ts, Date.now())
-  for (const update of matchedUpdates) {
-    replayReportUpdate(update, { messageTs })
-  }
+  const sampleTs = normalizeMetricTimestamp(sample.ts, Date.now())
+  fetchCurrentStatus(buildLiveStatusData({ ts: sampleTs, data: sample.data }), {
+    mergeMode: 'all',
+    chartMode: 'all'
+  })
 }
 
 const loadThemeOptionsFromConfig = async () => {
@@ -1677,9 +1689,10 @@ const init = async () => {
 
   liveSocket = createLiveSocket(String(serverId), {
     replay: false,
-    onMessage: handleLiveMessage,
+    onMessage: enqueueLiveMessage,
     onStatus: ({ connected }) => {}
   }, apiIndex.value)
+  liveUiUpdateInterval = setInterval(flushPendingLiveMessages, 1000)
 
   document.addEventListener('visibilitychange', handleVisibility)
 }
@@ -1697,6 +1710,8 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('visibilitychange', handleVisibility)
   if (liveSocket) liveSocket.close()
+  if (liveUiUpdateInterval) clearInterval(liveUiUpdateInterval)
+  pendingLiveMessages = []
   clearLatestReportReplayTimers()
   lastGpuSignature = ''
   safeDestroyCharts()
