@@ -14,6 +14,7 @@ export const BILLING_CYCLES = Object.freeze([
 ]);
 
 export const CURRENCY_OPTIONS = Object.freeze([
+  { symbol: 'USD', nameZh: '美元', nameEn: 'US Dollar' },
   { symbol: '$', nameZh: '美元', nameEn: 'US Dollar' },
   { symbol: '¥', nameZh: '人民币', nameEn: 'Chinese Yuan' },
   { symbol: '€', nameZh: '欧元', nameEn: 'Euro' },
