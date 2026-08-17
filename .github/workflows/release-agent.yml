@@ -34,7 +34,7 @@ jobs:
 
     steps:
       - name: Checkout agent source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.AGENT_REPOSITORY }}
           ref: ${{ inputs.agent_ref || env.DEFAULT_AGENT_REF }}
@@ -102,7 +102,7 @@ jobs:
 
       - name: Set up Go
         if: steps.current.outputs.publish == 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: agent-src/go.mod
           cache-dependency-path: agent-src/go.sum
@@ -252,7 +252,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "CFSM Agent latest - ${VERSION}" \
             --notes "$notes" \
-            --latest=false
+            --latest
 
       - name: Summary
         shell: bash
