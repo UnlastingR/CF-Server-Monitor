@@ -228,6 +228,7 @@
         :current-server-name="currentServerName"
         :target-os="targetOs"
         :install-gh-proxy="installGhProxy"
+        :user-background="userBackground"
         :collect-interval="collectInterval"
         :report-interval="reportInterval"
         :connection-mode="connectionMode"
@@ -246,6 +247,7 @@
         @copy-cmd="copyCustomCmd"
         @update:target-os="targetOs = $event"
         @update:install-gh-proxy="installGhProxy = $event"
+        @update:user-background="userBackground = $event"
         @open-edit-from-copy="openEditModalFromCopy"
       />
 
@@ -949,6 +951,7 @@ const copyServerId = ref('')
 const currentServerName = ref('')
 const targetOs = ref('linux')
 const installGhProxy = ref('')
+const userBackground = ref(false)
 const collectInterval = ref(0)
 const reportInterval = ref(60)
 const connectionMode = ref('auto')
@@ -1444,11 +1447,11 @@ const getUninstallCommand = () => {
   if (isGo) {
     const proxyParam = proxy ? ` --install-ghproxy=${proxy}` : ''
     if (deleteTargetOs.value === 'windows') {
-      const ghUrl = buildGhRawUrl(proxy, '/huilang-me/cfsm-agent/main/install.ps1')
+      const ghUrl = buildGhRawUrl(proxy, '/UnlastingR/cfsm-agent/main/install.ps1')
       return `$script = "$env:TEMP\\install-cf-probe.ps1"; Invoke-WebRequest -Uri "${ghUrl}" -OutFile $script -UseBasicParsing; PowerShell -ExecutionPolicy Bypass -File $script uninstall${proxyParam}`
     }
     const sudoPrefix = deleteTargetOs.value === 'mac' ? 'sudo ' : ''
-    const ghUrl = buildGhRawUrl(proxy, '/huilang-me/cfsm-agent/main/install.sh')
+    const ghUrl = buildGhRawUrl(proxy, '/UnlastingR/cfsm-agent/main/install.sh')
     return `curl -fsSL ${ghUrl} | ${sudoPrefix}sh -s -- uninstall${proxyParam}`
   }
   if (deleteTargetOs.value === 'windows') {
@@ -1470,6 +1473,7 @@ const copyCmd = (serverId) => {
   currentServerName.value = server?.name || ''
   targetOs.value = 'linux'
   installGhProxy.value = ''
+  userBackground.value = false
   collectInterval.value = server?.collect_interval ?? 0
   reportInterval.value = server?.report_interval || 60
   connectionMode.value = getEffectiveConnectionMode(server?.connection_mode)
@@ -1522,11 +1526,12 @@ const getCustomInstallCommand = () => {
     if (networkInterface.value) params.push(`-interface='${networkInterface.value}'`)
     if (hasCorrectionValue(rxCorrection.value)) params.push(`-rx_correction='${rxCorrection.value}'`)
     if (hasCorrectionValue(txCorrection.value)) params.push(`-tx_correction='${txCorrection.value}'`)
-    const ghUrl = buildGhRawUrl(proxy, '/huilang-me/cfsm-agent/main/install.ps1')
+    const ghUrl = buildGhRawUrl(proxy, '/UnlastingR/cfsm-agent/main/install.ps1')
     return `$script = "$env:TEMP\\install-cf-probe.ps1"; Invoke-WebRequest -Uri "${ghUrl}" -OutFile $script -UseBasicParsing; PowerShell -ExecutionPolicy Bypass -File $script ${params.join(' ')}`
   }
   const params = ['install']
   if (proxy) params.push(`--install-ghproxy=${proxy}`)
+  if (userBackground.value) params.push('-user_background=1')
   params.push(
     `-id=${copyServerId.value}`,
     `-secret='${apiSecret.value}'`,
@@ -1544,7 +1549,7 @@ const getCustomInstallCommand = () => {
   if (networkInterface.value) params.push(`-interface=${networkInterface.value}`)
   if (hasCorrectionValue(rxCorrection.value)) params.push(`-rx_correction=${rxCorrection.value}`)
   if (hasCorrectionValue(txCorrection.value)) params.push(`-tx_correction=${txCorrection.value}`)
-  const ghUrl = buildGhRawUrl(proxy, '/huilang-me/cfsm-agent/main/install.sh')
+  const ghUrl = buildGhRawUrl(proxy, '/UnlastingR/cfsm-agent/main/install.sh')
   return `curl -fsSL ${ghUrl} | sh -s -- ${params.join(' ')}`
 }
 

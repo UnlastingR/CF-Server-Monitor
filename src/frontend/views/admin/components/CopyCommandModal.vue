@@ -34,6 +34,20 @@
         </div>
       </div>
 
+      <div v-if="targetOs !== 'windows'" class="form-group">
+        <label class="admin-checkbox-label flex items-start gap-2">
+          <input
+            type="checkbox"
+            :checked="userBackground"
+            @change="$emit('update:user-background', $event.target.checked)"
+          >
+          <span>
+            <span>{{ trans.userBackground }}</span>
+            <small class="block text-secondary mt-1">{{ trans.userBackgroundTip }}</small>
+          </span>
+        </label>
+      </div>
+
       <div class="config-list">
         <div class="config-row">
           <span class="config-label">{{ trans.collectInterval }}</span>
@@ -114,6 +128,7 @@ defineProps({
   currentServerName: { type: String, default: '' },
   targetOs: { type: String, default: 'linux' },
   installGhProxy: { type: String, default: '' },
+  userBackground: { type: Boolean, default: false },
   collectInterval: { type: [Number, String], default: 0 },
   reportInterval: { type: [Number, String], default: 60 },
   connectionMode: { type: String, default: 'auto' },
@@ -135,7 +150,8 @@ defineEmits([
   'copy-cmd',
   'open-edit-from-copy',
   'update:target-os',
-  'update:install-gh-proxy'
+  'update:install-gh-proxy',
+  'update:user-background'
 ])
 
 const isBlank = (value) => value === '' || value === null || value === undefined
