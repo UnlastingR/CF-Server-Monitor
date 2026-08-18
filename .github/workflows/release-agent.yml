@@ -6,7 +6,7 @@ on:
       agent_ref:
         description: Source ref in UnlastingR/cfsm-agent
         required: true
-        default: fix/stable-latest-endpoint
+        default: main
         type: string
       force:
         description: Rebuild even when agent-latest already points at this source commit
@@ -25,7 +25,7 @@ concurrency:
 
 env:
   AGENT_REPOSITORY: UnlastingR/cfsm-agent
-  DEFAULT_AGENT_REF: fix/stable-latest-endpoint
+  DEFAULT_AGENT_REF: main
 
 jobs:
   publish:
