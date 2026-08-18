@@ -8,9 +8,8 @@
 // - 后端 /update WSS 由本 DO 接收 Agent 指标，并向所有订阅者广播。
 // - 兼容旧 POST 上报，/update 处理器在成功写入 DB 后会调用 /__do_push/<id>。
 //
-// - 前端订阅连接使用 DO WebSocket Hibernation API，闲置时休眠以节省资源。
+// - 前端订阅与 Agent 上报连接都使用 DO WebSocket Hibernation API，闲置时允许休眠以节省 duration。
 //   通过 setWebSocketAutoResponse 自动响应 ping，无需唤醒 DO。
-// - Agent 上报连接使用标准 WebSocket API，避免高频指标消息计为 hibernation wakeup。
 
 import { saveMetricsHistory } from '../database/schema.js';
 import { ensureServerOptimization } from '../database/indexOptimization.js';
@@ -44,9 +43,7 @@ const AGENT_REPORT_KIND = 'agent-report';
 const DEFAULT_AGENT_HISTORY_WRITE_INTERVAL_MS = 60 * 1000;
 const ALLOWED_AGENT_REPORT_INTERVALS = new Set([30, 60, 120, 180]);
 const AGENT_SERVER_DETAIL_TTL_MS = 120 * 1000;
-const AGENT_REALTIME_REPORT_DIVISOR = 15;
 const FRONTEND_ACTIVE_AGENT_REPORT_INTERVAL_MS = 1000;
-const IDLE_AGENT_WSS_REPORT_INTERVAL_MULTIPLIER = 2;
 const RESOURCE_ALERT_AGENT_REPORT_INTERVAL_MS = 60 * 1000;
 const LATEST_REPORT_TTL_MS = 5 * 60 * 1000;
 const MAX_LATEST_REPORT_SERVERS = 1000;
@@ -445,8 +442,6 @@ export class MetricsBroadcaster {
     this.latencyWindowLastSnapshotSave = new Map();
     this.agentServerDetails = new Map();
     this.agentHistoryWrites = new Map();
-    this.standardAgentWebSocketCount = 0;
-    this.standardAgentWebSockets = new Set();
     this.lastAgentRealtimeHintAt = 0;
 
     // 自动响应 ping 心跳，DO 无需被唤醒
@@ -595,15 +590,22 @@ export class MetricsBroadcaster {
     return this._getFrontendWebSockets().length;
   }
 
+  _getVisibleFrontendSubscriberCount() {
+    return this._getFrontendWebSockets().filter(ws => {
+      const attachment = ws.deserializeAttachment() || {};
+      return attachment.visible !== false;
+    }).length;
+  }
+
   _getAgentReportWebSockets() {
-    const sockets = new Set(this.standardAgentWebSockets);
+    const sockets = [];
     for (const ws of this.state.getWebSockets()) {
       const attachment = ws.deserializeAttachment();
       if (attachment?.kind === AGENT_REPORT_KIND) {
-        sockets.add(ws);
+        sockets.push(ws);
       }
     }
-    return Array.from(sockets);
+    return sockets;
   }
 
   _isWebSocketUpgrade(request) {
@@ -617,44 +619,12 @@ export class MetricsBroadcaster {
     } catch (_) {}
   }
 
-  _acceptStandardAgentWebSocket(server, initialAttachment) {
-    // Agent 上报连接使用标准 WebSocket API，避免每条业务消息都成为 hibernation wakeup。
-    // 代价是只要 Agent 长连接存在，本 DO 就不能休眠，会持续产生 duration。
-    server.accept();
-
-    const session = { attachment: initialAttachment || {} };
-    const ws = {
-      send: data => server.send(data),
-      close: (code, reason) => server.close(code, reason),
-      serializeAttachment(value) {
-        session.attachment = value || {};
-      },
-      deserializeAttachment() {
-        return session.attachment;
-      }
-    };
-
-    this.standardAgentWebSocketCount += 1;
-    this.standardAgentWebSockets.add(ws);
-    let cleaned = false;
-    const cleanup = () => {
-      if (cleaned) return;
-      cleaned = true;
-      this.standardAgentWebSocketCount = Math.max(0, this.standardAgentWebSocketCount - 1);
-      this.standardAgentWebSockets.delete(ws);
-    };
-
-    server.addEventListener('message', event => {
-      this._handleAgentReportMessage(ws, event.data, ws.deserializeAttachment())
-        .catch(error => {
-          console.warn('[update-ws] Agent standard WebSocket message failed:', error?.message || error);
-          this._closeWsWithError(ws, 'Internal error', 500);
-        });
-    });
-    server.addEventListener('close', cleanup);
-    server.addEventListener('error', cleanup);
-
-    return ws;
+  _acceptHibernatingAgentWebSocket(server, initialAttachment) {
+    // Agent 也由 Hibernation API 接管。连接可保持不断开，但 DO 在消息之间可以休眠，
+    // attachment 会由 runtime 保留，历史写入时间戳与配置状态不会因休眠丢失。
+    this.state.acceptWebSocket(server);
+    server.serializeAttachment(initialAttachment || {});
+    return server;
   }
 
   _closeWsWithError(ws, message, code = 400) {
@@ -1072,9 +1042,11 @@ export class MetricsBroadcaster {
     this._broadcastBatch(normalizedUpdates, reportTs);
   }
 
-  _getAgentRealtimeState(now = Date.now()) {
-    const frontendActive = this._getFrontendSubscriberCount() > 0;
-    const resourceAlertActive = this._shouldCacheResourceAlertSamples(now);
+  _getAgentRealtimeState(now = Date.now(), agentAttachment = null) {
+    const frontendActive = this._getVisibleFrontendSubscriberCount() > 0;
+    const attachedResourceAlertActiveUntil = Number(agentAttachment?.resourceAlertActiveUntil) || 0;
+    const resourceAlertActive = this._shouldCacheResourceAlertSamples(now) ||
+      now <= attachedResourceAlertActiveUntil;
     return {
       frontendActive,
       resourceAlertActive,
@@ -1105,17 +1077,15 @@ export class MetricsBroadcaster {
       Number(reportIntervalMs) || DEFAULT_AGENT_HISTORY_WRITE_INTERVAL_MS
     );
     const state = this._normalizeRealtimeState(realtimeState);
-    const realtimeIntervalMs = Math.max(
-      1000,
-      Math.ceil((historyIntervalMs / 1000) / AGENT_REALTIME_REPORT_DIVISOR) * 1000
-    );
     if (state.frontendActive) return FRONTEND_ACTIVE_AGENT_REPORT_INTERVAL_MS;
 
     if (state.resourceAlertActive) {
       return Math.max(historyIntervalMs, RESOURCE_ALERT_AGENT_REPORT_INTERVAL_MS);
     }
 
-    return realtimeIntervalMs * IDLE_AGENT_WSS_REPORT_INTERVAL_MULTIPLIER;
+    // 没有可见前端、也没有资源告警消费者时，只按历史持久化间隔上报。
+    // 这样 Hibernation WebSocket 在 60/120/180 秒消息之间可以真正休眠。
+    return historyIntervalMs;
   }
 
   async _getAgentHintReportIntervalMs(attachment) {
@@ -1140,7 +1110,6 @@ export class MetricsBroadcaster {
   async _hintAgentRealtimeIntervals(realtimeState = null) {
     const now = Date.now();
     const state = realtimeState || this._getAgentRealtimeState(now);
-    if (!state.frontendActive) return 0;
     if (now - this.lastAgentRealtimeHintAt < 1000) return 0;
     this.lastAgentRealtimeHintAt = now;
 
@@ -1157,6 +1126,15 @@ export class MetricsBroadcaster {
 
       const reportIntervalMs = await this._getAgentHintReportIntervalMs(attachment);
       const nextWssReportAfterMs = this._getAgentNextWssReportAfterMs(reportIntervalMs, state);
+      if (state.resourceAlertActive) {
+        ws.serializeAttachment({
+          ...attachment,
+          resourceAlertActiveUntil: Math.max(
+            Number(attachment.resourceAlertActiveUntil) || 0,
+            now + RESOURCE_ALERT_CACHE_ACTIVE_GRACE_MS
+          )
+        });
+      }
       this._sendWsJson(ws, {
         type: 'ack',
         ts: Date.now(),
@@ -1300,7 +1278,7 @@ export class MetricsBroadcaster {
       serverId: context.serverId,
       samples: broadcastSamples
     }];
-    const realtimeState = this._getAgentRealtimeState(reportTs);
+    const realtimeState = this._getAgentRealtimeState(reportTs, context.attachment);
     if (realtimeState.realtimeActive) {
       await this._ingestRealtimeUpdates(normalizedUpdates, reportTs);
     } else {
@@ -1345,7 +1323,7 @@ export class MetricsBroadcaster {
     // @ts-ignore - Cloudflare Workers runtime provides WebSocketPair
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    const agentSocket = this._acceptStandardAgentWebSocket(server, {
+    const agentSocket = this._acceptHibernatingAgentWebSocket(server, {
       kind: AGENT_REPORT_KIND,
       authenticated: false,
       serverId: '',
@@ -1430,7 +1408,7 @@ export class MetricsBroadcaster {
       this.state.acceptWebSocket(server);
 
       // 将订阅 scope 和空 serverIds 附加到 WebSocket（休眠后仍保留）
-      server.serializeAttachment({ scope, serverIds: [] });
+      server.serializeAttachment({ scope, serverIds: [], visible: false });
 
       // 立即发送 hello 让客户端确认连接成功
       try {
@@ -1619,6 +1597,11 @@ export class MetricsBroadcaster {
       this._activateResourceAlertCache();
       await this._ensureResourceAlertSnapshotLoaded();
       const result = await this._evaluateResourceAlertRules(normalizedRules.rules);
+      try {
+        await this._hintAgentRealtimeIntervals(this._getAgentRealtimeState());
+      } catch (e) {
+        console.warn('[resource-alert] Failed to hint Agent interval:', e?.message || e);
+      }
 
       return new Response(JSON.stringify(result), {
         headers: {
@@ -1631,8 +1614,8 @@ export class MetricsBroadcaster {
     // ── 3) 健康检查 ────────────────────────────────────
     if (method === 'GET' && (path === '/health' || path.endsWith('/health'))) {
       const subscribers = this._getFrontendSubscriberCount();
-      const agentSockets = this.standardAgentWebSocketCount;
-      const sockets = this.state.getWebSockets().length + agentSockets;
+      const agentSockets = this._getAgentReportWebSockets().length;
+      const sockets = this.state.getWebSockets().length;
       return new Response(JSON.stringify({ ok: true, subscribers, sockets, agentSockets }), {
         headers: { 'Content-Type': 'application/json' }
       });
@@ -2207,7 +2190,8 @@ export class MetricsBroadcaster {
         }
 
         const serverIds = normalizedServerIds.ids;
-        ws.serializeAttachment({ scope, serverIds });
+        const visible = msg.visible !== false;
+        ws.serializeAttachment({ scope, serverIds, visible });
         try {
           ws.send(JSON.stringify({
             type: 'subscribed',
@@ -2217,13 +2201,19 @@ export class MetricsBroadcaster {
           }));
         } catch (_) {}
         try {
-          await this._hintAgentRealtimeIntervals({
-            frontendActive: true,
-            resourceAlertActive: this._shouldCacheResourceAlertSamples(),
-            realtimeActive: true
-          });
+          await this._hintAgentRealtimeIntervals(this._getAgentRealtimeState());
         } catch (e) {
           console.warn('[ws] Failed to hint agent realtime interval:', e?.message || e);
+        }
+        return;
+      }
+      if (msg && msg.type === 'visibility' && typeof msg.visible === 'boolean') {
+        const current = ws.deserializeAttachment() || {};
+        ws.serializeAttachment({ ...current, visible: msg.visible });
+        try {
+          await this._hintAgentRealtimeIntervals(this._getAgentRealtimeState());
+        } catch (e) {
+          console.warn('[ws] Failed to hint agent visibility interval:', e?.message || e);
         }
         return;
       }

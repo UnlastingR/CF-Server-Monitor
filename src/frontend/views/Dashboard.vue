@@ -867,7 +867,20 @@ let liveSockets = []
 let themeObserver = null
 let timeUpdateInterval = null
 
+const stopLiveSockets = () => {
+  if (liveSockets.length > 0) {
+    liveSockets.forEach(socket => {
+      if (socket) socket.close()
+    })
+  }
+  liveSockets = []
+  liveConnected.value = false
+}
+
 const startLiveSocket = () => {
+  stopLiveSockets()
+  if (document.hidden) return
+
   const bases = getApiBases()
 
   // 按 source 分组，每个 apiBase 只传自己的 server IDs
@@ -906,6 +919,14 @@ const startLiveSocket = () => {
       }
     }, index, ids)
   }).filter(Boolean)
+}
+
+const handleVisibility = () => {
+  if (document.hidden) {
+    stopLiveSockets()
+  } else {
+    startLiveSocket()
+  }
 }
 
 const initMap = () => {
@@ -1052,6 +1073,7 @@ onMounted(async () => {
   }
   await refreshData()
   startLiveSocket()
+  document.addEventListener('visibilitychange', handleVisibility)
 
   // 每秒更新 now 变量，使相对时间实时刷新
   runDashboardTick()
@@ -1073,13 +1095,10 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibility)
   pendingLiveMessages = []
   if (timeUpdateInterval) clearInterval(timeUpdateInterval)
-  if (liveSockets.length > 0) {
-    liveSockets.forEach(socket => {
-      if (socket) socket.close()
-    })
-  }
+  stopLiveSockets()
   if (themeObserver) themeObserver.disconnect()
 })
 </script>

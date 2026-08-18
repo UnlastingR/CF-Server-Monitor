@@ -131,7 +131,8 @@ export const createLiveSocket = (subscribe, handlers = {}, apiIndex = 0, serverI
         ws.send(JSON.stringify({
           type: 'subscribe',
           scope,
-          ids: Array.isArray(serverIds) ? serverIds : []
+          ids: Array.isArray(serverIds) ? serverIds : [],
+          visible: !document.hidden
         }))
       } catch (_) {}
       setStatus(true, 'connected')
