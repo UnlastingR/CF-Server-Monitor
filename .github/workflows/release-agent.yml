@@ -201,7 +201,7 @@ jobs:
           Source: ${AGENT_REPOSITORY}@${SOURCE_REF}
           Commit: ${SOURCE_SHA}
 
-          This release is built by UnlastingR/CF-Server-Monitor and is kept as an immutable provenance snapshot.
+          This release is built by fyzure/CF-Server-Monitor and is kept as an immutable provenance snapshot.
           Use the agent-latest release for stable installation URLs.
           EOF
           )
